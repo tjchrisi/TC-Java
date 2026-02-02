@@ -1,37 +1,61 @@
-# example workflow for Polaris scans using the Black Duck Action
-# https://github.com/marketplace/actions/black-duck-security-scan
-name: polaris
+name: Black Duck SCA
+
 on:
   push:
-    branches: [ main, master, develop, stage, release ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main, master, develop, stage, release ]
+    branches: [ main, develop ]
   workflow_dispatch:
-jobs:
-  build:
-    runs-on: [ ubuntu-latest ]
-    steps:
-      - name: Checkout Source
-        uses: actions/checkout@v3
-      - name: Polaris Scan
-        uses: blackduck-inc/black-duck-security-scan@v2.0.0
-        with:
-          ### SCANNING: Required fields
-          polaris_server_url: ${{ vars.POLARIS_SERVERURL }}
-          polaris_access_token: ${{ secrets.POLARIS_ACCESSTOKEN }}
-          polaris_assessment_types: "SCA,SAST"
-          
-          ### SCANNING: Optional fields
-          polaris_application_name:  TestTJ
-          polaris_project_name: ${{ github.event.repository.name }}
-          
-          ### PULL REQUEST COMMENTS: Uncomment below to enable
-          polaris_prComment_enabled: true 
-          github_token: ${{ secrets.GITHUB_TOKEN }} # Required when PR comments is enabled
 
-          ### SARIF report parameters
-          polaris_reports_sarif_create: true
-          polaris_upload_sarif_report: true
-          
-          ### Signature scan
-          #polaris_test_sca_type: "SCA-SIGNATURE"
+# Required to upload SARIF to the Security tab and comment on PRs
+permissions:
+  contents: write
+  security-events: write
+  pull-requests: write
+
+jobs:
+  sca:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # Build if it's a Maven project (safe no-op otherwise)
+      - name: Build (skip tests if Maven project)
+        run: bash -lc 'if [ -f pom.xml ]; then mvn -B -DskipTests package; else echo "No Maven project detected; skipping build."; fi'
+
+      # Preflight: URL must be base host (no trailing /sca)
+      - name: Preflight — Validate BLACKDUCK_URL format
+        run: |
+          URL="${{ vars.BLACKDUCK_URL }}"
+          if [[ -z "$URL" ]]; then
+            echo "BLACKDUCK_URL is empty"; exit 1
+          fi
+          if [[ "$URL" == */sca ]]; then
+            echo "BLACKDUCK_URL must be the BASE host (no trailing /sca). Current: $URL"
+            exit 1
+          fi
+          echo "BLACKDUCK_URL looks good: $URL"
+
+      - name: DEBUG — reached Black Duck step
+        run: echo "About to run Black Duck SCA step…"
+
+      # ---- Black Duck SCA Scan ----
+      # Generate SARIF but DO NOT use the action's internal uploader (we'll upload explicitly)
+      - name: Black Duck SCA Scan
+        uses: blackduck-inc/black-duck-security-scan@v2.1.1
+        with:
+          blackducksca_url:   ${{ vars.BLACKDUCK_URL }}
+          blackducksca_token: ${{ secrets.BLACKDUCK_API_TOKEN }}
+
+          # Enable PR comments (optional)
+          blackducksca_prcomment_enabled: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
